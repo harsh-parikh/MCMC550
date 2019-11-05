@@ -91,7 +91,8 @@ def mcmc(data, output, rng_states, n_iter):
                 shared[tx] += shared[tx+s]
             cuda.syncthreads()
             s>>=1
-        # Get the log-likelihood   
+        # Get the log-likelihood;
+        # this will trigger a "broadcast", see https://devblogs.nvidia.com/using-shared-memory-cuda-cc/   
         logp_ = shared[0]
         
         # Add the log-prior
