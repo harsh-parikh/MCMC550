@@ -31,6 +31,7 @@ Y = alpha + beta[0]*X1 + beta[1]*X2 + np.random.randn(size)*sigma
 fig = plt.figure(figsize=(8.75,7))
 plt.scatter(X1, Y, alpha=0.5)
 plt.scatter(X2, Y, alpha=0.5)
-plt.set_ylabel('Y'); plt.set_xlabel('X1'); plt.set_xlabel('X2');
+plt.ylabel('Y'); plt.xlabel('X[.]');
+plt.legend(['X1','X2'])
 fig.savefig('dgp_standard.png')
 
