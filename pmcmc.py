@@ -6,6 +6,9 @@ from numba.cuda.random import xoroshiro128p_uniform_float64, xoroshiro128p_norma
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+import matplotlib.transforms as transforms
+
 
 class pMCMC:        
     """Host code of our parallel MCMC implementation.
@@ -74,7 +77,7 @@ def mcmc(data, output, rng_states, n_iter):
     
     # Add the log-prior
     log_prior = -(((theta[0]-1)**2)/2 + ((theta[1]-1)**2)/2) 
-    logp += log_prior
+    logp += log_prior/2
     
     # Main MCMC Loop
     for i in range(n_iter):
@@ -97,7 +100,7 @@ def mcmc(data, output, rng_states, n_iter):
         
         # Add the log-prior
         log_prior = -(((theta_[0]-1)**2)/2 + ((theta_[1]-1)**2)/2) 
-        logp_ += log_prior
+        logp_ += log_prior/2
         
         # Acceptance ratio
         alpha = math.exp(min(0,logp_-logp))
@@ -110,4 +113,54 @@ def mcmc(data, output, rng_states, n_iter):
         
         # Write the sample to the memory
         if tx == 0:
-            output[i,bw] = theta
+            output[i,ty] = theta
+
+def confidence_ellipse(mean, cov, ax, n_std=1.0, edgecolor='black', **kwargs):
+    """
+    Create a plot of the covariance confidence ellipse of *x* and *y*.
+
+    Parameters
+    ----------
+    x, y : array-like, shape (n, )
+        Input data.
+
+    ax : matplotlib.axes.Axes
+        The axes object to draw the ellipse into.
+
+    n_std : float
+        The number of standard deviations to determine the ellipse's radiuses.
+
+    Returns
+    -------
+    matplotlib.patches.Ellipse
+
+    Other parameters
+    ----------------
+    kwargs : `~matplotlib.patches.Patch` properties
+    """
+    pearson = cov[0, 1]/np.sqrt(cov[0, 0] * cov[1, 1])
+    # Using a special case to obtain the eigenvalues of this
+    # two-dimensionl dataset.
+    ell_radius_x = np.sqrt(1 + pearson)
+    ell_radius_y = np.sqrt(1 - pearson)
+    ellipse = Ellipse((0, 0),
+        width=ell_radius_x * 2,
+        height=ell_radius_y * 2,
+        edgecolor=edgecolor,
+        **kwargs)
+
+    # Calculating the stdandard deviation of x from
+    # the squareroot of the variance and multiplying
+    # with the given number of standard deviations.
+    scale_x = np.sqrt(cov[0, 0]) * n_std
+
+    # calculating the stdandard deviation of y ...
+    scale_y = np.sqrt(cov[1, 1]) * n_std
+
+    transf = transforms.Affine2D() \
+        .rotate_deg(45) \
+        .scale(scale_x, scale_y) \
+        .translate(mean[0], mean[1])
+
+    ellipse.set_transform(transf + ax.transData)
+    return ax.add_patch(ellipse)
