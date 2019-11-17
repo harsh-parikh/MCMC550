@@ -27,8 +27,11 @@ X2 = np.random.randn(size) * 0.2
 # Simulate outcome variable
 Y = alpha + beta[0]*X1 + beta[1]*X2 + np.random.randn(size)*sigma
 
-fig, axes = plt.subplots(1, 2, sharex=True, figsize=(10,4))
-axes[0].scatter(X1, Y)
-axes[1].scatter(X2, Y)
-axes[0].set_ylabel('Y'); axes[0].set_xlabel('X1'); axes[1].set_xlabel('X2');
+    
+fig = plt.figure(figsize=(8.75,7))
+plt.scatter(X1, Y, alpha=0.5)
+plt.scatter(X2, Y, alpha=0.5)
+plt.ylabel('Y'); plt.xlabel('X[.]');
+plt.legend(['X1','X2'])
 fig.savefig('dgp_standard.png')
+
