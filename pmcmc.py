@@ -115,6 +115,120 @@ def mcmc(data, output, rng_states, n_iter):
         if tx == 0:
             output[i,ty] = theta
 
+            
+class pMCMC_Bench:        
+    """Host code of our parallel MCMC implementation.
+    """
+    def __init__(self, X, Y, block_size, n_iter, seed=0):
+        self.X = cuda.to_device(X)
+        self.Y = cuda.to_device(Y)
+        self.n_iter = n_iter
+        
+        # Parameters for the kernel launch 
+        self.block_size = block_size
+        self.n_samples = X.shape[0]
+        self.n_blocks = self.n_samples // block_size
+        
+        # Allocate an output array on the GPU
+        self.output = cuda.device_array((n_iter,self.n_blocks,4))
+        
+        # Create random number generators for each thread
+        # NOTE: The threads within the same block should generate the same random numbers
+        rng_states = np.empty(self.n_samples, dtype=xoroshiro128p_dtype)
+        for i in range(self.n_samples):
+            init_xoroshiro128p_state(rng_states, i, seed)  # Init to a fixed state
+            for j in range(i//block_size):  # Jump forward block_index*2^64 steps
+                xoroshiro128p_jump(rng_states, i)
+        self.rng_states = cuda.to_device(rng_states)  # Copy it to the GPU
+        
+    def launch(self):
+        """Launches the kernel and returns the MCMC samples.
+        """
+        mcmc_bench[ self.n_blocks, self.block_size ]( self.X, self.Y, self.output, self.rng_states, self.n_iter)
+        return self.output.copy_to_host()
+    
+            
+
+@cuda.jit
+def mcmc_bench(X, Y, output, rng_states, n_iter):
+    """Device code of our parallel MCMC implementation.
+    """
+    shared = cuda.shared.array(shape=(2**9,), dtype=float64)  # Shared Memory
+    tx = cuda.threadIdx.x  # Thread ID
+    ty = cuda.blockIdx.x  # Block ID
+    bw = cuda.blockDim.x  # Block Size
+    idx = bw*ty+tx  # Global ID
+    
+    alpha, beta0, beta1, sigma = 0, 0, 0, 1
+    x = X[idx]  # Fetch the data point
+    y = Y[idx]
+    mu = alpha + beta0*x[0] + beta1*x[1]
+    logp_xy = -((y-mu)**2)/(2*(sigma**2)) - math.log(sigma)  # Log-likelihood of the data point
+    shared[tx] = logp_xy  # Put the log-likelihood to the shared memory
+    cuda.syncthreads()
+    
+    # Reduction using sequential addressing. NOTE: Increasing the data points per thread might increase the performance
+    s = bw//2
+    while s>0:
+        if tx < s:
+            shared[tx] += shared[tx+s]
+        cuda.syncthreads()
+        s>>=1
+    # Get the log-likelihood of the sub-dataset from the first position
+    logp = shared[0]  #  NOTE: Might cause some performance issues
+    
+    # Add the log-prior
+    log_prior = - ((alpha**2)/(2*(10**2)) + (beta0**2)/(2*(10**2)) + (beta1**2)/(2*(10**2)) + (sigma**2)/2)
+    logp += log_prior
+    
+    # Main MCMC Loop
+    for i in range(n_iter):
+        # Propose a new theta
+        alpha_ = alpha + 0.1*xoroshiro128p_normal_float64(rng_states, idx)
+        beta0_ = beta0 + 0.1*xoroshiro128p_normal_float64(rng_states, idx)
+        beta1_ = beta1 + 0.1*xoroshiro128p_normal_float64(rng_states, idx)
+        sigma_ = sigma + 0.1*xoroshiro128p_normal_float64(rng_states, idx)
+        
+        mu = alpha_ + beta0_*x[0] + beta1_*x[1]
+        logp_xy = -((y-mu)**2)/(2*(sigma_**2)) - math.log(sigma_)
+        shared[tx] = logp_xy  # Put the log-likelihood to the shared memory
+        cuda.syncthreads()
+        
+        # Reduction using sequential addressing
+        s = bw//2
+        while s>0:
+            if tx < s:
+                shared[tx] += shared[tx+s]
+            cuda.syncthreads()
+            s>>=1
+        # Get the log-likelihood;
+        # this will trigger a "broadcast", see https://devblogs.nvidia.com/using-shared-memory-cuda-cc/   
+        logp_ = shared[0]
+        
+        # Add the log-prior
+        log_prior = - ((alpha_**2)/(2*(10**2)) + (beta0_**2)/(2*(10**2)) + (beta1_**2)/(2*(10**2)) + (sigma_**2)/2)
+        logp_ += log_prior
+        
+        # Acceptance ratio
+        gamma = math.exp(min(0,logp_-logp))
+        # Draw a uniform random number
+        u = xoroshiro128p_uniform_float64(rng_states, idx)
+        # Accept/Reject?
+        if u < gamma:
+            alpha = alpha_
+            beta0 = beta0_
+            beta1 = beta1_
+            sigma = sigma_
+            logp = logp_
+        
+        # Write the sample to the memory
+        if tx == 0:
+            output[i,ty,0] = alpha
+            output[i,ty,1] = beta0
+            output[i,ty,2] = beta1
+            output[i,ty,3] = sigma
+            
+
 def confidence_ellipse(mean, cov, ax, n_std=1.0, edgecolor='black', **kwargs):
     """
     Create a plot of the covariance confidence ellipse of *x* and *y*.
